@@ -1,0 +1,713 @@
+###### SET UP #####
+#Directory set up
+setwd("your working directory")
+
+#Package load
+pacman::p_load(dplyr,tidyr,ggstatsplot,readxl,tableone,car,easystats,
+               patchwork,MASS,see,qqplotr,bootStepAIC,performance,mediation,
+               rpart,rpart.plot,gtools,broom,lmtest,visdat,parameters,
+               ggcharts,conflicted,RNHANES,rattle,mlogit,MLmetrics,transplantr,
+               survey,haven,survey,CVrisk)
+
+# Solving duplicate function conflicts
+conflict_prefer("select","dplyr")
+conflict_prefer("filter", "dplyr")
+conflict_prefer("mutate", "dplyr")
+
+###### DATA HANDLING #####
+#Data uploadres
+bioq <- read_excel("detBioCronicosAdultos.xlsx")
+bioq$UPM <- as.character(bioq$UPM)
+bioq$VIV_SEL <- as.character(bioq$VIV_SEL)
+bioq$HOGAR <- as.character(bioq$HOGAR)
+bioq$NUMREN <- as.character(bioq$NUMREN)
+
+antro <- read_excel("CN_ANTROPOMETRIA.xlsx")
+antro$UPM <- as.character(antro$UPM)
+antro$VIV_SEL <- as.character(antro$VIV_SEL)
+antro$HOGAR <- as.character(antro$HOGAR)
+antro$NUMREN <- as.character(antro$NUMREN)
+
+#Dataset merging
+antro <- antro %>% select(UPM,VIV_SEL,HOGAR,NUMREN,PESO1_2,TALLA4_2,P27_2_1,
+                          CIRCUNFERENCIA8_2,CINTURA21_2,P27_2_2) %>% 
+                  mutate(id=interaction(UPM,VIV_SEL,HOGAR,NUMREN)) %>%               
+                  mutate(imc=(PESO1_2/(TALLA4_2/100)^2)) %>% 
+                  mutate(imcq  = quantcut(imc,q=5)) %>% 
+                  mutate(ica=CINTURA21_2/TALLA4_2) %>% 
+                  mutate(icc=CINTURA21_2/CIRCUNFERENCIA8_2) %>% 
+                  rename(psis=P27_2_1,pdias=P27_2_2,peso=PESO1_2,talla=TALLA4_2,
+                         circcintura=CINTURA21_2,circcadera=CIRCUNFERENCIA8_2)
+
+bioq <- bioq %>% select(UPM,VIV_SEL,HOGAR,NUMREN,EDAD,SEXO,VALOR_GLU_SUERO,
+                        VALOR_HB1AC,
+                        VALOR_ALBUM,VALOR_COL_HDL,VALOR_COL_LDL,VALOR_COLEST,
+                        VALOR_CREAT,VALOR_INSULINA,VALOR_TRIG) %>% 
+  mutate(id=interaction(UPM,VIV_SEL,HOGAR,NUMREN)) %>%
+  mutate(tgtohdl=VALOR_TRIG/VALOR_COL_HDL) %>% 
+  mutate(nonhdl=VALOR_COLEST-VALOR_COL_HDL) %>% 
+  mutate(ldlsmpsn= (VALOR_COLEST/0.948)-(VALOR_COL_HDL/0.971)-((VALOR_TRIG/8.56)+
+        ((VALOR_TRIG*nonhdl)/2140)-(VALOR_TRIG/16100))-9.44) %>% 
+  mutate(rmnnt=VALOR_COLEST-ldlsmpsn-VALOR_COL_HDL) %>% 
+  mutate(rmnntq  = quantcut(rmnnt,q=5)) %>% 
+  mutate(rmnntd  = quantcut(rmnnt,q=10)) %>% 
+  mutate(decada = case_when(EDAD < 30 ~ "veintes",
+                            EDAD<40 & EDAD>=30 ~ "treintas",
+                            EDAD<50 & EDAD>=40 ~ "cuarentas",
+                            EDAD<60 & EDAD>=50 ~ "cincuentas",
+                            EDAD<70 & EDAD>=60 ~ "sesentas",
+                            EDAD<80 & EDAD>=70 ~ "setentas",
+                            EDAD<90 & EDAD>=80 ~ "ochentas",
+                            EDAD<100 & EDAD>=90 ~ "noventas",
+                            EDAD<120 & EDAD>=100 ~ "cienes",
+                            TRUE ~ "NO")) %>% 
+  mutate(homair=VALOR_INSULINA*(VALOR_GLU_SUERO/405)) %>% 
+  mutate(etnia="non-black") %>% 
+  rename(edad=EDAD,sexo=SEXO,glu=VALOR_GLU_SUERO,
+         hba1c=VALOR_HB1AC,alb=VALOR_ALBUM,hdl=VALOR_COL_HDL,
+         ldl=VALOR_COL_LDL,colest=VALOR_COLEST,cr=VALOR_CREAT,
+         ins=VALOR_INSULINA,trig=VALOR_TRIG) %>% 
+  mutate(tfg = ckd_epi(creat = cr, age = edad, sex = sexo,
+                        eth = etnia, units = "US")) %>% 
+  mutate(across(where(is.numeric), round, 1)) %>%
+  filter(between(glu,40,1000),between(alb,1,6),between(hdl,14,101),
+         between(cr,0.2,10),between(ins,0,50),between(ldlsmpsn,20,1000),
+         between(homair,0,15)) %>% 
+    na.omit()
+  
+#Merging third (INSP) dataset
+data <- merge(bioq,antro,by="id")
+data2 <- read_dta("DATA.dta")
+data2$UPM <- as.character(data2$code_upm)
+data2$VIV_SEL <- as.character(data2$viv_sel)
+data2$HOGAR <- as.character(data2$hogar)
+data2$NUMREN <- as.character(data2$numren)
+data2 <- data2 %>% mutate(id=interaction(UPM,VIV_SEL,HOGAR,NUMREN)) 
+data2 <- data2 %>% select(UPM,VIV_SEL,HOGAR,NUMREN,id,dx_infarto,estrato,pondes,
+                          sexo,edad,entidad,nse3,ecv,alc2,nhba1c,tas,tad,estrato,
+                          nhdl,nldl,ncolest,ninsulina,nse3,imc_valid,fuma3,hta2,
+                          encuesta,alc2,escolaridad,tas,tad,fuma3,ntrig,dia3,dlc_m1,
+                          txhtrig,txhcol,h_ayuno,ngluc,talla5,sxmetatp3,med13,h_ayuno,
+                          dx_dia,ngluc,med1,med2,med3,med4,med5,med6,med7,med8) %>% 
+                    mutate(dx_infarto=ifelse(dx_infarto==1,"1","0")) 
+data <- merge(data,data2,by="id") %>% 
+  filter(trig<401) %>% 
+  mutate(ldlsmpsnq=quantcut(ldlsmpsn,q=5)) %>% 
+  mutate(a1cq=quantcut(hba1c,q=5))
+
+#FINAL DATASET
+write.csv(data,"merged_and_filtered_data.csv")
+
+##### DEFINING DISEASES IN THE DATASET #####
+data <- read.csv("merged_and_filtered_data.csv")
+data <- data %>% select(UPM,VIV_SEL,HOGAR,NUMREN,id,edad.x,sexo.x,glu,hba1c,alb,
+                        hdl,colest,cr,ldlsmpsn,ins,trig,tgtohdl,homair,tfg,psis,
+                        pdias,imc,rmnnt,imcq,rmnntq,rmnntd,decada,dx_infarto,estrato,pondes,
+                        entidad,ecv,nse3,alc2,fuma3,nhba1c,hta2,dia3,txhtrig,txhcol,
+                        nhdl,nldl,ncolest,ninsulina,imc_valid,fuma3,encuesta,ngluc,
+                        alc2,ntrig,sxmetatp3,med13,dlc_m1,dx_dia,h_ayuno,
+                        ngluc,med1,med2,med3,med4,med5,med6,med7,med8) %>% 
+                  mutate(DM=dia3==T|glu>126|glu>126|
+                           hba1c>6.4|nhba1c>6.4|dx_dia==1) %>% 
+                  mutate(CKD=tfg<=90) %>% 
+                  mutate(DLP=ldlsmpsn>=190|trig>=150| sexo.x == "F" & hdl < 50 |
+                           sexo.x == "M" & hdl < 40 |txhcol==1|txhtrig==1) %>% 
+                  mutate(HTN=hta2==T) %>% 
+                  mutate(OBESITY=imc>=30) %>% 
+                  mutate(SEX = ifelse(sexo.x=="F","WOMAN","MAN")) %>% 
+                  mutate(across(where(is.numeric), round, 1)) %>% 
+                  mutate(dx_infarto=as.factor(dx_infarto)) %>% 
+                  mutate(ASCVD=case_when(dx_infarto == 1 ~ T,
+                                   ecv == 1 ~ T,
+                                   TRUE ~ F)) %>%  
+                  mutate(race="hispanic") %>% 
+                  mutate(gender=ifelse(SEX=="MAN","male","female")) %>% 
+                  mutate(smoker=ifelse(fuma3==1,1,0)) %>% 
+                  rename(sbp=psis) %>% 
+                  mutate(diabetes=ifelse(DM==T,1,0)) %>% 
+                  mutate(cholesterol=colest) %>% 
+                  mutate(treatedsbp = ifelse(med13 == 1, 1, 0))%>% 
+                  mutate(treatedlp = ifelse(txhcol == 1, 1, 0))%>% 
+                  mutate(famcvd = ifelse(dlc_m1 == 1, 1, 0))%>% 
+                  mutate(totalChol=as.numeric(colest)) %>% 
+                  mutate(cvdrisk = chd_10y_mesa(age = edad.x,
+                                  gender = gender,
+                                  race = race,
+                                  totchol = totalChol,
+                                  hdl = hdl,
+                                  sbp= sbp,
+                                  bp_med = treatedsbp,
+                                  lipid_med = treatedlp,
+                                  smoker = smoker,
+                                  diabetes = diabetes,
+                                  fh_heartattack = famcvd)) %>% 
+                  mutate(age=as.numeric(edad.x))
+
+data <- data %>% mutate(vhrisk=((DM==T&ldlsmpsn>189&HTN==T)|
+                                   (DM==T&sbp>180&DLP==T)|
+                                   (DM==T&smoker==1)|
+                                   ASCVD==1|
+                                   tfg<=30)) %>% 
+                  mutate(hrisk=(tfg<60&tfg>30&vhrisk==F)|
+                           (ldlsmpsn>=190&vhrisk==F)|
+                           (vhrisk==F&sbp>=180)|
+                           (vhrisk==F&cholesterol>310)|
+                           (DM==T&HTN==T&vhrisk==F)|
+                           (DM==T&OBESITY==T&vhrisk==F)|
+                           (DM==T&DLP==T&vhrisk==F)) %>% 
+                  mutate(mrisk=(vhrisk==F&hrisk==F))
+                
+data$ASCVD <- as.factor(data$ASCVD)
+write.csv(data,"disease_definitions.csv")
+
+##### ENCODING ENSANUT'S STRATIFIED COMPLEX DESIGN #####
+design <- svydesign(id =  ~ UPM, nest = TRUE, 
+                    weights = ~pondes,
+                    strata = ~estrato,
+                    survey.lonely.psu = "adjust", 
+                    data = data)
+
+###### DESCRIPTIVE STATS #####
+tab1 <- CreateContTable(data=data,
+                        vars = c("age","glu","hba1c","alb","hdl","colest","cr",
+                                 "ldlsmpsn","ins","trig","tgtohdl","homair",
+                                 "tfg","psis","pdias","imc","rmnnt"))
+
+### Punctual estimates accounting for ENSANUT'S complex design
+### Quantitative variables
+edad <- svymean(~age, design, na=TRUE, ci=TRUE)
+edad_ci <- confint(svymean(~age, design))
+edad
+edad_ci
+
+psis <- svymean(~sbp, design, na=TRUE, ci=TRUE)
+psis_ci <- confint(svymean(~sbp, design))
+psis
+psis_ci
+
+pdias <- svymean(~pdias, design, na=TRUE, ci=TRUE)
+pdias_ci <- confint(svymean(~pdias, design))
+pdias
+pdias_ci
+
+glu <- svymean(~glu, design, na=TRUE, ci=TRUE)
+glu_ci <- confint(svymean(~glu, design))
+glu
+glu_ci
+
+hba1c <- svymean(~hba1c, design, na=TRUE, ci=TRUE)
+hba1c_ci <- confint(svymean(~hba1c, design))
+hba1c
+hba1c_ci
+
+hdl <- svymean(~hdl, design, na=TRUE, ci=TRUE)
+hdl_ci <- confint(svymean(~hdl, design))
+hdl
+hdl_ci
+
+colest <- svymean(~colest, design, na=TRUE, ci=TRUE)
+colest_ci <- confint(svymean(~colest, design))
+colest
+colest_ci
+
+ldl <- svymean(~ldlsmpsn, design, na=TRUE, ci=TRUE)
+ldl_ci <- confint(svymean(~ldlsmpsn, design))
+ldl
+ldl_ci
+
+trig <- svymean(~trig, design, na=TRUE, ci=TRUE)
+trig_ci <- confint(svymean(~trig, design))
+trig
+trig_ci
+
+imc <- svymean(~imc, design, na=TRUE, ci=TRUE)
+imc_ci <- confint(svymean(~imc, design))
+imc
+imc_ci
+
+tfg <- svymean(~tfg, design, na=TRUE, ci=TRUE)
+tfg_ci <- confint(svymean(~tfg, design))
+tfg
+tfg_ci
+
+tgtohdl <- svymean(~tgtohdl, design, na=TRUE, ci=TRUE)
+tgtohdl_ci <- confint(svymean(~tgtohdl, design))
+tgtohdl
+tgtohdl_ci
+
+rmnnt <- svymean(~rmnnt, design, na=TRUE, ci=TRUE)
+rmnnt_ci <- confint(svymean(~rmnnt, design))
+rmnnt
+rmnnt_ci
+
+homair <- svymean(~homair, design, na=TRUE, ci=TRUE)
+homair_ci <- confint(svymean(~homair, design))
+homair
+homair_ci
+
+
+### Categorical variables
+sexo <- svyciprop(~I(SEX=="WOMAN"), design, method="me",na.rm=TRUE)
+sexo
+
+svyciprop(~I(SEX=="WOMAN"& rmnnt>38), design, method="me",na.rm=TRUE)
+svyciprop(~I(SEX=="WOMAN"& rmnnt>38 & DM==T), design, method="me",na.rm=TRUE)
+svyciprop(~I(SEX=="WOMAN"& rmnnt>38 & HTN==T), design, method="me",na.rm=TRUE)
+svyciprop(~I(SEX=="WOMAN"& rmnnt>38 & OBESITY==T), design, method="me",na.rm=TRUE)
+svyciprop(~I(SEX=="WOMAN"& rmnnt>38 & age>39 & age<65), design, method="me",na.rm=TRUE)
+svyciprop(~I(SEX=="WOMAN"& rmnnt>38 & age>65), design, method="me",na.rm=TRUE)
+
+svyciprop(~I(SEX=="MAN"& rmnnt>38), design, method="me",na.rm=TRUE)
+svyciprop(~I(SEX=="MAN"& rmnnt>38 & DM==T), design, method="me",na.rm=TRUE)
+svyciprop(~I(SEX=="MAN"& rmnnt>38 & HTN==T), design, method="me",na.rm=TRUE)
+svyciprop(~I(SEX=="MAN"& rmnnt>38 & OBESITY==T), design, method="me",na.rm=TRUE)
+svyciprop(~I(SEX=="MAN"& rmnnt>38 & age>39 & age<65), design, method="me",na.rm=TRUE)
+svyciprop(~I(SEX=="MAN"& rmnnt>38 & age>65), design, method="me",na.rm=TRUE)
+
+svyciprop(~I(SEX=="MAN"& rmnnt>38& data$hrisk==T), design, method="me",na.rm=TRUE)
+svyciprop(~I(SEX=="WOMAN"& rmnnt>38& data$hrisk==T), design, method="me",na.rm=TRUE)
+svyciprop(~I(SEX=="MAN"& rmnnt>38& data$vhrisk==T), design, method="me",na.rm=TRUE)
+svyciprop(~I(SEX=="WOMAN"& rmnnt>38& data$vhrisk==T), design, method="me",na.rm=TRUE)
+
+dm <- svyciprop(~I(DM=="TRUE"), design, method="me",na.rm=TRUE)
+dm
+
+has <- svyciprop(~I(HTN=="TRUE"), design, method="me",na.rm=TRUE)
+has
+
+evc <- svyciprop(~I(ecv=="1"), design, method="me",na.rm=TRUE)
+evc
+
+iam <- svyciprop(~I(dx_infarto=="1"), design, method="me",na.rm=TRUE)
+iam
+
+erc <- svyciprop(~I(tfg<=60), design, method="me",na.rm=TRUE)
+erc
+
+obes <- svyciprop(~I(OBESITY=="TRUE"), design, method="me",na.rm=TRUE)
+obes
+
+dlp <- svyciprop(~I(DLP=="TRUE"), design, method="me",na.rm=TRUE)
+dlp
+
+nse1 <- svyciprop(~I(nse3=="1"), design, method="me",na.rm=TRUE)
+nse1
+
+nse2 <- svyciprop(~I(nse3=="2"), design, method="me",na.rm=TRUE)
+nse2
+
+nse3 <- svyciprop(~I(nse3=="3"), design, method="me",na.rm=TRUE)
+nse3
+
+alchol <- svyciprop(~I(alc2=="1"), design, method="me",na.rm=TRUE)
+alchol
+
+tabaco <- svyciprop(~I(fuma3=="1"), design, method="me",na.rm=TRUE)
+tabaco
+
+##### TABLE 3 #####
+veintesf <- data %>% filter (decada=="veintes" & SEX=="WOMAN") %>% select (SEX,rmnnt)
+veintesm <- data %>% filter (decada=="veintes" & SEX=="MAN") %>% select (SEX,rmnnt)
+treintasf <- data %>% filter (decada=="treintas" & SEX=="WOMAN") %>% select (SEX,rmnnt)
+treintasm <- data %>% filter (decada=="treintas" & SEX=="MAN") %>% select (SEX,rmnnt)
+cuarentasf <- data %>% filter (decada=="cuarentas" & SEX=="WOMAN") %>% select (SEX,rmnnt)
+cuarentasm <- data %>% filter (decada=="cuarentas" & SEX=="MAN") %>% select (SEX,rmnnt)
+cincuentasf <- data %>% filter (decada=="cincuentas" & SEX=="WOMAN") %>% select (SEX,rmnnt)
+cincuentasm <- data %>% filter (decada=="cincuentas" & SEX=="MAN") %>% select (SEX,rmnnt)
+sesentasf <- data %>% filter (decada=="sesentas" & SEX=="WOMAN") %>% select (SEX,rmnnt)
+sesentasm <- data %>% filter (decada=="sesentas" & SEX=="MAN") %>% select (SEX,rmnnt)
+setentasf <- data %>% filter (decada=="setentas" & SEX=="WOMAN") %>% select (SEX,rmnnt)
+setentasm <- data %>% filter (decada=="setentas" & SEX=="MAN") %>% select (SEX,rmnnt)
+ochentasf <- data %>% filter (decada=="ochentas" & SEX=="WOMAN") %>% select (SEX,rmnnt)
+ochentasm <- data %>% filter (decada=="ochentas" & SEX=="MAN") %>% select (SEX,rmnnt)
+noventasf <- data %>% filter (decada=="noventas" & SEX=="WOMAN") %>% select (SEX,rmnnt)
+noventasm <- data %>% filter (decada=="noventas" & SEX=="MAN") %>% select (SEX,rmnnt)
+cienesf <- data %>% filter (decada=="cienes" & SEX=="WOMAN") %>% select (SEX,rmnnt)
+cienesm <- data %>% filter (decada=="cienes" & SEX=="MAN") %>% select (SEX,rmnnt)
+
+quantile(veintesf$rmnnt, probs = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9))
+quantile(veintesm$rmnnt, probs = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9))
+quantile(treintasf$rmnnt, probs = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9))
+quantile(treintasm$rmnnt, probs = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9))
+quantile(cuarentasf$rmnnt, probs = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9))
+quantile(cuarentasm$rmnnt, probs = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9))
+quantile(cincuentasf$rmnnt, probs = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9))
+quantile(cincuentasm$rmnnt, probs = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9))
+quantile(sesentasf$rmnnt, probs = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9))
+quantile(sesentasm$rmnnt, probs = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9))
+quantile(setentasf$rmnnt, probs = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9))
+quantile(setentasm$rmnnt, probs = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9))
+quantile(ochentasf$rmnnt, probs = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9))
+quantile(ochentasm$rmnnt, probs = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9))
+quantile(noventasf$rmnnt, probs = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9))
+quantile(noventasm$rmnnt, probs = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9))
+quantile(cienesf$rmnnt, probs = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9))
+quantile(cienesm$rmnnt, probs = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9))
+
+##### TABLE 4 #####
+data <- data %>% 
+  mutate(atrisk=(hrisk==T|vhrisk==T)) %>% 
+  mutate(rmnnthighrisk=rmnnt>=38) %>% 
+  mutate(elder=age>65) %>% 
+  mutate(ldlchrisk=ldlsmpsn>99)
+
+table4 <- CreateTableOne(data=data,strata="atrisk",
+                         vars = c("DM","HTN","OBESITY",
+                                  "rmnnthighrisk","ldlchrisk"))
+table4
+1179/7570
+
+###### VALIDATING AGAINST NHANES #####
+# Getting NHANES' data
+## LDL (in mg/dL) is encoded as "LBLDL" and Triglycerides (in mg/dL) as "LBXTR"
+nhanes1 <-  nhanes_load_data("TRIGLY",
+                             c("2005-2006","2007-2008","2009-2010",
+                               "2011-2012","2013-2014"),demographics = T)
+subset_nhanes <- list()
+
+for (i in 1:length(nhanes1)) {subset_nhanes[[i]] <- 
+  nhanes1[[i]][,c("SEQN", "RIDAGEYR", "LBDLDL","LBXTR")]}
+nhanes1 <- do.call(rbind, subset_nhanes)
+
+## HDL (in mg/dL) is encoded as "LBDHDD"
+nhanes2 <- nhanes_load_data("HDL",
+                            c("2005-2006","2007-2008","2009-2010","2011-2012",
+                              "2013-2014"),demographics = T)
+
+for (i in 1:length(nhanes2)) {subset_nhanes[[i]] <- 
+  nhanes2[[i]][, c("SEQN", "LBDHDD")]}
+nhanes2 <- do.call(rbind, subset_nhanes)
+
+## BMI (kg/m2) is encoded as "BMXBMI"
+nhanes3 <- nhanes_load_data("BMX",
+                            c("2005-2006","2007-2008","2009-2010","2011-2012","2013-2014"),
+                            demographics = T)
+
+for (i in 1:length(nhanes3)) {subset_nhanes[[i]] <- 
+  nhanes3[[i]][, c("SEQN", "BMXBMI","RIDRETH1")]}
+nhanes3 <- do.call(rbind, subset_nhanes)
+
+## TCHOL (in mg/dL) is encoded as "LBXTC"
+nhanes4 <- nhanes_load_data("TCHOL",
+                            c("2005-2006","2007-2008","2009-2010","2011-2012","2013-2014"),
+                            demographics = T)
+
+for (i in 1:length(nhanes4)) {subset_nhanes[[i]] <- 
+  nhanes4[[i]][, c("SEQN", "LBXTC")]}
+nhanes4 <- do.call(rbind, subset_nhanes)
+
+### Data years and encoding can be corroborated at: 
+### https://wwwn.cdc.gov/nchs/nhanes/search/default.aspx
+
+# Merging NHANES' data sets and excluding children
+nhanes_lipids <- merge(nhanes1,nhanes2,by="SEQN")
+nhanes_lipids <- merge(nhanes_lipids,nhanes4,by="SEQN")
+nhanes_demo <- merge(nhanes3,nhanes4,by="SEQN") 
+nhanes_data <- merge(nhanes_lipids,nhanes_demo,by="SEQN") %>% 
+            filter(RIDAGEYR>17) %>% 
+            rename(LBXTC=LBXTC.x) %>% 
+#Calculating remnants in NHANES
+            mutate(rmnnt=LBXTC-LBDLDL-LBDHDD) %>% 
+            filter(rmnnt<421)
+
+mexamnhanes <- nhanes_data %>% filter(RIDRETH1==1)
+nhanes_data <- nhanes_data %>% filter(!RIDRETH1==1)
+
+### Visual Comparisons
+## BMI
+nhanes_imc <- ggplot(data=data,mapping = aes(x=imc))+
+  geom_density(inherit.aes = TRUE,color="#006341", fill="#006341",alpha=0.3)+
+  geom_density(inherit.aes = FALSE, data=mexamnhanes,mapping = (aes(x=BMXBMI))
+               ,color="blue3",fill="blue3",alpha=0.3)+
+  ggtitle("A) BMI")+
+  scale_y_continuous(name="Density",breaks=waiver())+
+  scale_x_continuous(name="kg/m?",breaks=waiver(),limits = c(10,60))+
+  ggplot2::theme(plot.title = element_text(size=24,face = "bold"),
+                 plot.title.position = "plot",
+                 plot.margin = margin(1,1,1,1,unit="cm"),
+                 axis.title.y = element_text(size=20,colour = "black",face="bold",margin = margin(r=1,unit="cm")),
+                 axis.title.x = element_text(size=20,colour = "black",face="bold",margin = margin(t=1,unit="cm")),
+                 axis.text = element_text(size=16,colour = "black", face="bold"),
+                 plot.subtitle = element_text(size=20,colour = "blue",face="bold",hjust = 0.5,margin = margin(b=1,unit="cm")),
+                 plot.caption = element_text(size=18,colour="gray40",face="bold.italic",hjust = 1,margin = margin(t=0.5,unit="cm")),
+                 panel.background = element_blank(),
+                 panel.grid.minor = element_blank(),
+                 panel.grid.major = element_blank()) +  coord_cartesian(expand = F)
+ggsave("Figure_1_Panel_A.jpeg", units="cm", width=20, height=20, dpi=1000)
+nhanes_imc
+
+## Cholesterol
+nhanes_chol <- ggplot(data=data,mapping = aes(x=colest))+
+  geom_density(inherit.aes = TRUE,color="#006341", fill="#006341",alpha=0.3)+
+  geom_density(inherit.aes = FALSE, data=mexamnhanes,mapping = (aes(x=LBXTC))
+               ,color="blue3",fill="blue3",alpha=0.3)+
+  ggtitle("B) Total Cholesterol")+
+  scale_y_continuous(name="Density",breaks=waiver())+
+  scale_x_continuous(name="mg/dL",breaks=waiver(),limits = c(20,400))+
+  ggplot2::theme(plot.title = element_text(size=24,face = "bold"),
+                 plot.title.position = "plot",
+                 plot.margin = margin(1,1,1,1,unit="cm"),
+                 axis.title.y = element_text(size=20,colour = "black",face="bold",margin = margin(r=1,unit="cm")),
+                 axis.title.x = element_text(size=20,colour = "black",face="bold",margin = margin(t=1,unit="cm")),
+                 axis.text = element_text(size=16,colour = "black", face="bold"),
+                 plot.subtitle = element_text(size=20,colour = "blue",face="bold",hjust = 0.5,margin = margin(b=1,unit="cm")),
+                 plot.caption = element_text(size=18,colour="gray40",face="bold.italic",hjust = 1,margin = margin(t=0.5,unit="cm")),
+                 panel.background = element_blank(),
+                 panel.grid.minor = element_blank(),
+                 panel.grid.major = element_blank()) +
+  coord_cartesian(expand = F)
+
+ggsave("Figure_1_Panel_B.jpeg", units="cm", width=20, height=20, dpi=1000)
+nhanes_chol
+
+## LDL
+nhanes_ldl <- ggplot(data=data,mapping = aes(x=ldlsmpsn))+
+  geom_density(inherit.aes = TRUE,color="#006341", fill="#006341",alpha=0.3)+
+  geom_density(inherit.aes = FALSE, data=mexamnhanes,mapping = (aes(x=LBDLDL))
+               ,color="blue3",fill="blue3",alpha=0.3)+
+  ggtitle("C) LDL")+
+  scale_y_continuous(name="Density",breaks=waiver())+
+  scale_x_continuous(name="mg/dL",breaks=waiver(),limits = c(20,300))+
+  ggplot2::theme(plot.title = element_text(size=24,face = "bold"),
+                 plot.title.position = "plot",
+                 plot.margin = margin(1,1,1,1,unit="cm"),
+                 axis.title.y = element_text(size=20,colour = "black",face="bold",margin = margin(r=1,unit="cm")),
+                 axis.title.x = element_text(size=20,colour = "black",face="bold",margin = margin(t=1,unit="cm")),
+                 axis.text = element_text(size=16,colour = "black", face="bold"),
+                 plot.subtitle = element_text(size=20,colour = "blue",face="bold",hjust = 0.5,margin = margin(b=1,unit="cm")),
+                 plot.caption = element_text(size=18,colour="gray40",face="bold.italic",hjust = 1,margin = margin(t=0.5,unit="cm")),
+                 panel.background = element_blank(),
+                 panel.grid.minor = element_blank(),
+                 panel.grid.major = element_blank()) +
+  coord_cartesian(expand = F)
+
+ggsave("Figure_1_Panel_C.jpeg", units="cm", width=20, height=20, dpi=1000)
+nhanes_ldl
+
+## Remnants
+nhanes_rmnnt <- ggplot(data=data,mapping = aes(x=rmnnt))+
+  geom_density(inherit.aes = TRUE,color="#006341", fill="#006341",alpha=0.3)+
+  geom_density(inherit.aes = FALSE, data=mexamnhanes,mapping = (aes(x=rmnnt))
+               ,color="blue3",fill="blue3",alpha=0.3)+
+  ggtitle("D) Remnants")+
+  scale_y_continuous(name="Density",breaks=waiver())+
+  scale_x_continuous(name="mg/dL",breaks=waiver(),limits = c(0,100))+
+  ggplot2::theme(plot.title = element_text(size=24,face = "bold"),
+                 plot.title.position = "plot",
+                 plot.margin = margin(1,1,1,1,unit="cm"),
+                 axis.title.y = element_text(size=20,colour = "black",face="bold",margin = margin(r=1,unit="cm")),
+                 axis.title.x = element_text(size=20,colour = "black",face="bold",margin = margin(t=1,unit="cm")),
+                 axis.text = element_text(size=16,colour = "black", face="bold"),
+                 plot.subtitle = element_text(size=20,colour = "blue",face="bold",hjust = 0.5,margin = margin(b=1,unit="cm")),
+                 plot.caption = element_text(size=18,colour="gray40",face="bold.italic",hjust = 1,margin = margin(t=0.5,unit="cm")),
+                 panel.background = element_blank(),
+                 panel.grid.minor = element_blank(),
+                 panel.grid.major = element_blank()) +
+  coord_cartesian(expand = F)
+
+ggsave("Figure_1_Panel_D.jpeg", units="cm", width=20, height=20, dpi=1000)
+nhanes_rmnnt
+
+Figure_1 <- nhanes_imc+nhanes_chol+nhanes_ldl+nhanes_rmnnt
+Figure_1
+ggsave("Figure_1.jpeg", units="cm", width=20, height=20, dpi=1000)
+
+quantile(nhanes_data$rmnnt, probs = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9),na.rm=T)
+quantile(mexamnhanes$rmnnt, probs = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9),na.rm=T)
+quantile(data$rmnnt, probs = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9),na.rm=T)
+
+##### REMNANT QUINTILE DISTRIBUTION #####
+data <- data %>% filter(is.finite(rmnnt))
+FigDist <- ggplot(data, aes(x =rmnnt,fill=factor(rmnntq),color=factor(rmnntq))) +
+  geom_density(alpha=0.5, adjust=0.5) +
+  theme_minimal()+
+  labs(
+    x = "mg/dL",     
+    title = "Remnant Blood Concentration by Quintile",
+    fill = "Quintile",
+    color = "Quintile")+
+  scale_x_continuous(breaks = seq(0,150, by= 25),limits = c(0,150))+
+  scale_color_brewer(palette = "GnBu",labels=c("Q1","Q2","Q3","Q4","Q5")) +
+  scale_fill_brewer(palette = "GnBu",labels=c("Q1","Q2","Q3","Q4","Q5"))+
+  ggplot2::theme(plot.title = element_text(size=14,face = "bold"),
+                 plot.title.position = "plot",
+                 plot.margin = margin(1,1,1,1,unit="cm"),
+                 legend.title = element_text(size=12,colour = "black",face="bold"),
+                 legend.text = element_text(size=10,colour = "black", face="bold"),
+                 axis.title.y = element_blank(),
+                 axis.text.y = element_blank(),
+                 axis.title.x = element_text(size=12,colour = "black",face="bold"),
+                 axis.text.x = element_text(size=10,colour = "black", face="bold"),
+                 panel.grid.minor = element_blank(),
+                 panel.grid.major = element_blank()) 
+FigDist
+ggsave("Figure_2.jpeg", units="cm", width=20, height=20, dpi=1000)
+
+###### RISK MODELS #####
+ASCVD_lr <- glm(cvdrisk~rmnnt+age+imc+ldlsmpsn,data=data)
+summary(ASCVD_lr)
+confint(ASCVD_lr)
+ASCVD_betas <- ggcoefstats(ASCVD_lr,
+                         output = "plot",
+                         exclude.intercept = T,
+                         effsize = "beta", 
+                         bf.message = F,
+                         caption = T,
+                         package = "khroma",
+                         palette = "contrast",
+                         title = "A) Remnant Concentration vs CVD Risk",
+                         point.args = list(color = "gray", size = 4, shape = 15),
+                         )+ggplot2::labs(x = "Estimate", y = "Predictor")+
+                   ggplot2::scale_y_discrete(labels = c("Remnants","Age","BMI","LDL","Socioeconomic Tertile"))+    
+                 ggplot2::theme(plot.title = element_text(size=24,face = "bold"),
+                 plot.title.position = "plot",
+                 plot.margin = margin(1,1,1,1,unit="cm"),
+                 axis.title.y = element_text(size=22,colour = "black",face="bold",margin = margin(r=1,unit="cm")),
+                 axis.title.x = element_text(size=22,colour = "black",face="bold",margin = margin(t=1,unit="cm")),
+                 axis.text.y = element_text(size=18,colour = "black",face="bold",margin = margin(r=1,unit="cm")),
+                 axis.text.x = element_text(size=18,colour = "black",face="bold",margin = margin(t=1,unit="cm")),
+                 panel.grid.minor = element_blank(),
+                 panel.grid.major = element_blank())
+ASCVD_betas
+ggsave("Figure_3_Panel_A.jpeg", units="cm", width=20, height=20, dpi=1000)
+
+DM_lr <- glm(DM~rmnnt+age+imc+ldlsmpsn,data=data,family = "binomial")
+summary(DM_lr)
+confint(DM_lr)
+DM_betas <- ggcoefstats(DM_lr, output = "plot",
+                        exclude.intercept = T,
+                        effsize = "omega", 
+                        bf.message = F,
+                        caption = T,
+                        package = "khroma",
+                        palette = "contrast",
+                        title = "B) Remnant Concentration vs Diabetes Risk",
+                        point.args = list(color = "gray", size = 4, shape = 15),
+)+ggplot2::labs(x = "Estimate", y = "Predictor")+
+  ggplot2::scale_y_discrete(labels = c("Remnants","Age","BMI","LDL","Socioeconomic Tertile"))+    
+  ggplot2::theme(plot.title = element_text(size=24,face = "bold"),
+                 plot.title.position = "plot",
+                 plot.margin = margin(1,1,1,1,unit="cm"),
+                 axis.title.y = element_text(size=22,colour = "black",face="bold",margin = margin(r=1,unit="cm")),
+                 axis.title.x = element_text(size=22,colour = "black",face="bold",margin = margin(t=1,unit="cm")),
+                 axis.text.y = element_text(size=18,colour = "black",face="bold",margin = margin(r=1,unit="cm")),
+                 axis.text.x = element_text(size=18,colour = "black",face="bold",margin = margin(t=1,unit="cm")),
+                 panel.grid.minor = element_blank(),
+                 panel.grid.major = element_blank())
+DM_betas
+ggsave("Figure_3_Panel_B.jpeg", units="cm", width=20, height=20, dpi=1000)
+
+HTN_lr <- glm(HTN~rmnnt+age+imc+ldlsmpsn,data=data,family = "binomial")
+summary(HTN_lr)
+confint(HTN_lr)
+HTN_betas <- ggcoefstats(HTN_lr, output = "plot",
+                         exclude.intercept = T,
+                         effsize = "omega", 
+                         bf.message = F,
+                         caption = T,
+                         package = "khroma",
+                         palette = "contrast",
+                         title = "C) Remnant Concentration vs Hypertension Risk",
+                         point.args = list(color = "gray", size = 4, shape = 15),
+)+ggplot2::labs(x = "Estimate", y = "Predictor")+
+  ggplot2::scale_y_discrete(labels = c("Remnants","Age","BMI","LDL","Socioeconomic Tertile"))+    
+  ggplot2::theme(plot.title = element_text(size=24,face = "bold"),
+                 plot.title.position = "plot",
+                 plot.margin = margin(1,1,1,1,unit="cm"),
+                 axis.title.y = element_text(size=22,colour = "black",face="bold",margin = margin(r=1,unit="cm")),
+                 axis.title.x = element_text(size=22,colour = "black",face="bold",margin = margin(t=1,unit="cm")),
+                 axis.text.y = element_text(size=18,colour = "black",face="bold",margin = margin(r=1,unit="cm")),
+                 axis.text.x = element_text(size=18,colour = "black",face="bold",margin = margin(t=1,unit="cm")),
+                 panel.grid.minor = element_blank(),
+                 panel.grid.major = element_blank())
+HTN_betas
+ggsave("Figure_3_Panel_C.jpeg", units="cm", width=20, height=20, dpi=1000)
+
+OBESITY_lr <- glm(OBESITY~rmnnt+age+ldlsmpsn,data=data,family = "binomial")
+summary(OBESITY_lr)
+confint(OBESITY_lr)
+OBESITY_betas <- ggcoefstats(OBESITY_lr, output = "plot",
+                             exclude.intercept = T,
+                             effsize = "omega", 
+                             bf.message = F,
+                             caption = T,
+                             package = "ggprism",
+                             palette = "black_and_white",
+                             title = "D) Remnant Concentration vs Obesty Risk",
+                             point.args = list(color = "gray", size = 4, shape = 15),
+)+ggplot2::labs(x = "Estimate", y = "Predictor")+
+  ggplot2::scale_y_discrete(labels = c("Remnants","Age", "LDL","Socioeconomic Tertile"))+    
+  ggplot2::theme(plot.title = element_text(size=24,face = "bold"),
+                 plot.title.position = "plot",
+                 plot.margin = margin(1,1,1,1,unit="cm"),
+                 axis.title.y = element_text(size=22,colour = "black",face="bold",margin = margin(r=1,unit="cm")),
+                 axis.title.x = element_text(size=22,colour = "black",face="bold",margin = margin(t=1,unit="cm")),
+                 axis.text.y = element_text(size=18,colour = "black",face="bold",margin = margin(r=1,unit="cm")),
+                 axis.text.x = element_text(size=18,colour = "black",face="bold",margin = margin(t=1,unit="cm")),
+                 panel.grid.minor = element_blank(),
+                 panel.grid.major = element_blank())
+OBESITY_betas
+ggsave("Figure_3_Panel_D.jpeg", units="cm", width=20, height=20, dpi=1000)
+
+METSX_lr <- glm(sxmetatp3~rmnnt+age+ldlsmpsn,data=data,family = "binomial")
+summary(METSX_lr)
+confint(METSX_lr)
+METSX_betas <- ggcoefstats(METSX_lr, output = "plot",
+                             exclude.intercept = T,
+                             effsize = "omega", 
+                             bf.message = F,
+                             caption = T,
+                             package = "ggprism",
+                             palette = "black_and_white",
+                             title = "E) Remnant Concentration vs Metabolic Syndrome Risk",
+                             point.args = list(color = "gray", size = 4, shape = 15),
+)+ggplot2::labs(x = "Estimate", y = "Predictor")+
+  ggplot2::scale_y_discrete(labels = c("Remnants","Age", "LDL"))+    
+  ggplot2::theme(plot.title = element_text(size=24,face = "bold"),
+                 plot.title.position = "plot",
+                 plot.margin = margin(1,1,1,1,unit="cm"),
+                 axis.title.y = element_text(size=22,colour = "black",face="bold",margin = margin(r=1,unit="cm")),
+                 axis.title.x = element_text(size=22,colour = "black",face="bold",margin = margin(t=1,unit="cm")),
+                 axis.text.y = element_text(size=18,colour = "black",face="bold",margin = margin(r=1,unit="cm")),
+                 axis.text.x = element_text(size=18,colour = "black",face="bold",margin = margin(t=1,unit="cm")),
+                 panel.grid.minor = element_blank(),
+                 panel.grid.major = element_blank())
+METSX_betas
+ggsave("Figure_3_Panel_E.jpeg", units="cm", width=20, height=20, dpi=1000)
+
+RMNNTHR <- lm(rmnnt~age+nse3+homair+ldlsmpsn+imc,data=data)
+summary(RMNNTHR)
+confint(RMNNTHR)
+RMNNTHR_betas <- ggcoefstats(RMNNTHR, output = "plot",
+                           exclude.intercept = T,
+                           effsize = "omega", 
+                           bf.message = F,
+                           caption = F,
+                           package = "khroma",
+                           palette = "contrast",
+                           title = "F) Predictors Blood Remnant Concentration",
+                           point.args = list(color = "gray", size = 4, shape = 15),
+)+ggplot2::labs(x = "Estimate", y = "Predictor")+
+  ggplot2::scale_y_discrete(labels = c("Age","Socioeconomic Tertile",
+                                       "HOMA-IR","LDL","BMI"))+  
+  ggplot2::theme(plot.title = element_text(size=24,face = "bold"),
+                 plot.title.position = "plot",
+                 plot.margin = margin(1,1,1,1,unit="cm"),
+                 axis.title.y = element_text(size=22,colour = "black",face="bold",margin = margin(r=1,unit="cm")),
+                 axis.title.x = element_text(size=22,colour = "black",face="bold",margin = margin(t=1,unit="cm")),
+                 axis.text.y = element_text(size=18,colour = "black",face="bold",margin = margin(r=1,unit="cm")),
+                 axis.text.x = element_text(size=18,colour = "black",face="bold",margin = margin(t=1,unit="cm")),
+                 panel.grid.minor = element_blank(),
+                 panel.grid.major = element_blank())
+RMNNTHR_betas
+ggsave("Figure_3_Panel_F.jpeg", units="cm", width=20, height=20, dpi=1000)
+
+##### POPULATION AT RISK #####
+poprisk <- data %>% filter(atrisk==T)
+poprob <- sum(poprisk$imc_valid>29.9, na.rm = T)
+poprobhr <- sum(poprisk$imc_valid>29.9 & poprisk$rmnnthighrisk==T, na.rm = T)
+poprobhr/poprob
+
+sum(data$ldlchrisk==F)
+ldlmissed <- data %>% filter(ldlchrisk==F&rmnnthighrisk==T)
+nrow(ldlmissed)
